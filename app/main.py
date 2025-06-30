@@ -110,21 +110,13 @@ async def get_current_active_user(current_user: Users = Depends(get_current_user
         )
     return current_user
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
 @app.post("/auth/register", response_model=Token)
 async def register_user(user: UserCreate, db: Session = Depends(get_db)):
     print("Received payload:", user)
     username = user.username.lower()
     hashed_password = get_password_hash(user.password)
+
+    # ✅ Create new user
     new_user = Users(
         username=username,
         email=user.email,
@@ -134,8 +126,21 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # ✅ If user is a patient, create associated patient record
+    if user.role == "patient":
+        patient = Patient(
+            user_id=new_user.id,
+            full_name=new_user.username.title(),
+            email=new_user.email
+        )
+        db.add(patient)
+        db.commit()
+
+    # ✅ Generate and return token
     access_token = create_access_token(data={"sub": new_user.username})
     return {"access_token": access_token, "token_type": "bearer"}
+
 
 @app.post("/auth/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -182,7 +187,7 @@ async def create_patient(patient: PatientCreate, db: Session = Depends(get_db), 
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Database constraint error.")
-#admin needs
+
 @app.get("/admin/patients")
 async def get_all_patients(
     db: Session = Depends(get_db),
@@ -190,9 +195,8 @@ async def get_all_patients(
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
+    return db.query(Patient).all()
 
-    patients = db.query(Patient).all()
-    return patients
 @app.get("/admin/tests")
 async def get_all_tests(
     db: Session = Depends(get_db),
@@ -200,8 +204,8 @@ async def get_all_tests(
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
-
     return db.query(TestResults).all()
+
 @app.get("/admin/appointments")
 async def get_all_appointments(
     db: Session = Depends(get_db),
@@ -209,9 +213,8 @@ async def get_all_appointments(
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
-
     return db.query(WellnessAppointments).all()
-    
+
 @app.get("/patient/dashboard-stats")
 async def get_patient_dashboard_stats(
     db: Session = Depends(get_db),
@@ -233,7 +236,7 @@ async def get_patient_dashboard_stats(
         ChatMessages.is_read == False
     ).count()
 
-    health_score = "85%"  # This can be calculated dynamically from vitals later.
+    health_score = "85%"  # Placeholder
 
     return {
         "appointments": appointment_count,
@@ -241,6 +244,29 @@ async def get_patient_dashboard_stats(
         "unread_messages": unread_message_count,
         "health_score": health_score
     }
+
+@app.get("/patient/test-results/recent", response_model=List[TestResultRead])
+async def get_recent_test_results(
+    db: Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user)
+):
+    if current_user.role != "patient":
+        raise HTTPException(status_code=403, detail="Patients only")
+
+    # Fetch patient record linked to current user
+    patient = db.query(Patient).filter(Patient.user_id == current_user.id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient record not found")
+
+    try:
+        results = db.query(TestResults).filter(
+            TestResults.patient_id == patient.patient_id
+        ).order_by(TestResults.generated_at.desc()).limit(5).all()
+        return results
+    except Exception as e:
+        logger.error(f"Failed to retrieve recent test results: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
 @app.get("/patient/appointments/upcoming")
 async def get_upcoming_appointments(
     db: Session = Depends(get_db),
@@ -253,36 +279,7 @@ async def get_upcoming_appointments(
         WellnessAppointments.patient_id == current_user.id,
         WellnessAppointments.appointment_date >= date.today()
     ).order_by(WellnessAppointments.appointment_date.asc()).limit(5).all()
-
     return upcoming
-@app.get("/patient/test-results/recent", response_model=List[TestResultRead])
-async def get_recent_test_results(
-    db: Session = Depends(get_db),
-    current_user: Users = Depends(get_current_user)
-):
-    if current_user.role != "patient":
-        raise HTTPException(status_code=403, detail="Patients only")
-
-    # 🔍 Fetch patient record linked to current user
-    patient = db.query(Patient).filter(Patient.user_id == current_user.id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient record not found")
-
-    try:
-        # ✅ Use the correct column: generated_at
-        results = db.query(TestResults).filter(
-            TestResults.patient_id == patient.patient_id
-        ).order_by(TestResults.generated_at.desc()).limit(5).all()
-
-        return results
-
-    except Exception as e:
-        logger.error(f"Failed to retrieve recent test results: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-
-
-
-        
 
 @app.get("/appointments/{appointment_id}", response_model=WellnessAppointmentRead)
 async def get_appointment(appointment_id: int, db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
@@ -292,18 +289,13 @@ async def get_appointment(appointment_id: int, db: Session = Depends(get_db), cu
     if current_user.role != "admin" and current_user.id != appointment.patient_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this appointment")
     return appointment
+
 @app.get("/appointments/patient/{patient_id}", response_model=List[WellnessAppointmentRead])
 async def get_patient_appointments(patient_id: int, db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
     if current_user.role != "patient" or current_user.id != patient_id:
         raise HTTPException(status_code=403, detail="Not authorized")
     return db.query(WellnessAppointments).filter(WellnessAppointments.patient_id == patient_id).all()
 
-# (Keep other routes same, replacing all instances of `.id` with correct fields like `.appointment_id`, `.patient_id`, etc. as needed)
-
-
-# ======================
-# Test Result Routes
-# ======================
 @app.post("/test-results", response_model=TestResultRead, status_code=201)
 async def create_test_result(
     result: TestResultBase, 
@@ -322,7 +314,6 @@ async def create_test_result(
         db.commit()
         db.refresh(new_result)
 
-        # ✅ Only add entity_id if your model includes it — or remove this line
         audit_log = AuditTrail(
             user_id=current_user.id,
             action=f"Created test result {new_result.id}",
@@ -331,16 +322,13 @@ async def create_test_result(
         )
         db.add(audit_log)
         db.commit()
-
         return new_result
-
     except Exception as e:
         db.rollback()
         raise HTTPException(
             status_code=500,
             detail=f"Error saving test result: {str(e)}"
         )
-
 
 @app.get("/test-results/{result_id}", response_model=TestResultRead)
 async def get_test_result(
@@ -349,20 +337,18 @@ async def get_test_result(
     current_user: Users = Depends(get_current_user)
 ):
     result = db.query(TestResults).filter(TestResults.id == result_id).first()
-
     if not result:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Test result not found"
         )
-
-    # ✅ Ensure only admin, lab_tech, or the actual patient can access
     if current_user.role not in ["admin", "lab_tech"] and current_user.id != result.patient_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view this test result"
         )
-        return result
+    return result
+
 @app.get("/patients/{patient_id}/test-results", response_model=List[TestResultRead])
 async def list_test_results_for_patient(
     patient_id: int,
@@ -370,15 +356,11 @@ async def list_test_results_for_patient(
     current_user: Users = Depends(get_current_user)
 ):
     if current_user.role != "admin":
-        # 🔍 Get the patient record associated with current user
         patient = db.query(Patient).filter(Patient.user_id == current_user.id).first()
         if not patient or patient.patient_id != patient_id:
             raise HTTPException(status_code=403, detail="Not authorized")
-
     return db.query(TestResults).filter(TestResults.patient_id == patient_id).all()
 
-
-    return db.query(TestResults).filter(TestResults.patient_id == patient_id).all()
 @app.delete("/test-results/{result_id}")
 async def delete_test_result(
     result_id: int,
@@ -395,11 +377,7 @@ async def delete_test_result(
     db.delete(result)
     db.commit()
     return {"message": "Test result deleted successfully"}
-   
 
-# ======================
-# Lab Routes
-# ======================
 @app.post("/labs", response_model=LabRead)
 async def create_lab(
     lab: LabBase, 
@@ -417,7 +395,6 @@ async def create_lab(
     db.commit()
     db.refresh(new_lab)
     
-    # Create audit log
     audit_log = AuditTrail(
         user_id=current_user.id,
         action=f"Created lab {new_lab.lab_id}",
@@ -427,7 +404,6 @@ async def create_lab(
     )
     db.add(audit_log)
     db.commit()
-    
     return new_lab
 
 @app.get("/labs", response_model=List[LabRead])
@@ -444,23 +420,18 @@ async def get_lab(lab_id: int, db: Session = Depends(get_db)):
         )
     return lab
 
-# ======================
-# Chat Routes
-# ======================
 @app.post("/messages", response_model=ChatMessageRead)
 async def send_message(
     message: ChatMessageBase, 
     db: Session = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    # ✅ Ensure the user is sending as themselves
     if message.sender_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only send messages as yourself"
         )
 
-    # ✅ Prevent empty messages
     if not message.message.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -479,7 +450,6 @@ async def get_messages(
     db: Session = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    # ✅ Only allow the user or admin to view their messages
     if current_user.id != id and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -492,9 +462,7 @@ async def get_messages(
             ChatMessages.recipient_id == id
         )
     ).order_by(ChatMessages.sent_at.asc()).all()
-# ======================
-# Admin Routes
-# ======================
+
 @app.get("/admin/audit-logs")
 async def get_audit_logs(
     db: Session = Depends(get_db),
@@ -506,7 +474,7 @@ async def get_audit_logs(
             detail="Only admins can view audit logs"
         )
     return db.query(AuditTrail).all()
-# Dashboard Stats
+
 @app.get("/admin/dashboard-stats")
 async def get_dashboard_stats(db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
     if current_user.role != "admin":
@@ -517,7 +485,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: Users
     appointments_today = db.query(func.count(WellnessAppointments.appointment_id))\
         .filter(func.date(WellnessAppointments.appointment_date) == date.today()).scalar()
 
-    system_health = 99.8  # Simulated metric or pull from monitoring
+    system_health = 99.8  # Simulated metric
 
     return {
         "total_users": total_users,
@@ -526,12 +494,11 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: Users
         "system_health": system_health
     }
 
-
-# Recent Users (last 5 users)
 @app.get("/admin/recent-users")
 async def get_recent_users(db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admins only")
+    if current_user.role not in ["admin", "lab_tech"]:
+        raise HTTPException(status_code=403, detail="Admins or Lab Techs only")
+
 
     users = db.query(Users).order_by(Users.created_at.desc()).limit(5).all()
     return [
@@ -543,6 +510,7 @@ async def get_recent_users(db: Session = Depends(get_db), current_user: Users = 
         }
         for user in users
     ]
+
 @app.post("/admin/upload-census")
 async def upload_census_file(
     file: UploadFile = File(...),
@@ -552,26 +520,22 @@ async def upload_census_file(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
 
-    # Placeholder logic — replace with real CSV/XLSX parsing and patient creation
     filename = file.filename
     contents = await file.read()
     total_rows = contents.decode("utf-8").count("\n")  # naive row count
-
-    # You’d use pandas or csv module to process rows
     logger.info(f"Uploaded file {filename} with approx {total_rows} rows")
-
     return {"message": f"File '{filename}' processed", "rows": total_rows}
+
 @app.get("/admin/alerts")
 async def get_system_alerts(
     db: Session = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admins only")
+    if current_user.role not in ["admin", "lab_tech"]:
+        raise HTTPException(status_code=403, detail="Admins or Lab Techs only")
 
     alerts = []
 
-    # Example alert: lab nearing capacity
     labs = db.query(Labs).all()
     for lab in labs:
         if lab.max_capacity and lab.current_capacity / lab.max_capacity >= 0.85:
@@ -582,7 +546,6 @@ async def get_system_alerts(
                 "timestamp": datetime.utcnow().isoformat()
             })
 
-    # Example success alert
     alerts.append({
         "type": "success",
         "title": "System backup completed successfully",
@@ -591,6 +554,7 @@ async def get_system_alerts(
     })
 
     return alerts
+
 @app.get("/admin/qr-logs")
 async def get_qr_registration_logs(
     current_user: Users = Depends(get_current_user)
@@ -598,14 +562,12 @@ async def get_qr_registration_logs(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
 
-    # Mock data — in future link to actual scanned QR records
     logs = [
         {"name": "Emily Johnson", "role": "Patient", "scanned_at": "2025-06-23T10:12:00Z"},
         {"name": "Dr. Chen", "role": "Lab Technician", "scanned_at": "2025-06-23T10:10:00Z"},
     ]
     return logs
 
-# Lab Capacity
 @app.get("/admin/lab-capacity")
 async def get_lab_capacity(db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
     if current_user.role != "admin":
@@ -621,7 +583,6 @@ async def get_lab_capacity(db: Session = Depends(get_db), current_user: Users = 
         }
         for lab in labs
     ]
-# in your FastAPI app file
 
 @app.get("/labtech/dashboard-stats")
 async def labtech_dashboard_stats(
@@ -630,14 +591,14 @@ async def labtech_dashboard_stats(
 ):
     if current_user.role != "lab_tech":
         raise HTTPException(status_code=403, detail="Lab technicians only")
-    # Stats
+    
     pending_tests = db.query(func.count(TestResults.id)).filter(TestResults.result_status == "pending").scalar()
     completed_today = db.query(func.count(TestResults.id)).filter(
         TestResults.result_status == "ready",
         func.date(TestResults.generated_at) == date.today()
     ).scalar()
     urgent_tests = db.query(func.count(WellnessAppointments.appointment_id)).filter(WellnessAppointments.appointment_type == "urgent").scalar()
-    # Simple changes (example only)
+    
     avg_time = "45min"
     return {
         "pending_tests": pending_tests,
@@ -657,9 +618,10 @@ async def labtech_test_queue(
 ):
     if current_user.role != "lab_tech":
         raise HTTPException(status_code=403, detail="Lab technicians only")
-    # Example: all pending tests with related patient
+    
     results = db.query(TestResults, Patient).join(Patient, TestResults.patient_id == Patient.patient_id)\
         .filter(TestResults.result_status == "pending").all()
+    
     queue = [
         {
           "id": f"TST-{r.TestResults.id:03d}",
@@ -680,6 +642,7 @@ async def labtech_messages(
 ):
     if current_user.role != "lab_tech":
         raise HTTPException(status_code=403, detail="Lab technicians only")
+    
     msgs = db.query(ChatMessages).filter(ChatMessages.recipient_id == current_user.id).order_by(ChatMessages.sent_at.desc()).limit(10).all()
     return [
         {
@@ -689,21 +652,13 @@ async def labtech_messages(
           "unread": not m.is_read
         } for m in msgs
     ]
-    
 
-# ======================
-# WebSocket Route
-# ======================
 @app.websocket("/ws/chat/{user_id}")
 async def websocket_chat(websocket: WebSocket, user_id: int):
     await websocket.accept()
     try:
         while True:
             data = await websocket.receive_text()
-            # Here you would typically:
-            # 1. Validate the message
-            # 2. Store it in the database
-            # 3. Broadcast to recipient if needed
             await websocket.send_text(f"Message received: {data}")
     except WebSocketDisconnect:
         logger.info(f"User {user_id} disconnected")
@@ -711,15 +666,13 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
         logger.error(f"WebSocket error: {str(e)}")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
 
-# ======================
-# Health Check
-# ======================
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat()
     }
+
 @app.post("/auth/logout")
 async def logout(current_user: Users = Depends(get_current_user)):
     return JSONResponse(
@@ -728,4 +681,3 @@ async def logout(current_user: Users = Depends(get_current_user)):
             "message": "Logout successful. Please clear the token on the client side."
         }
     )
-    

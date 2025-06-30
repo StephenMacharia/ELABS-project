@@ -60,7 +60,7 @@ class ResultStatus(str, Enum):
 
 class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
-    email: EmailStr
+    email: Optional[EmailStr] = None  # Make email optional
     role: UserRole = Field(default=UserRole.patient)
     is_active: bool = True
 
@@ -69,12 +69,14 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str = Field(..., min_length=5)
     role: UserRole = Field(default=UserRole.patient)
+    # Make email required during creation if needed
+    email: EmailStr = Field(...)
 
 class UserRead(UserBase):
     id: int
     last_login: Optional[datetime] = None
-
     model_config = ConfigDict(from_attributes=True)
+
 
 # ---------------------------
 # Patient Models
