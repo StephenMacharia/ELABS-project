@@ -116,7 +116,7 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
     username = user.username.lower()
     hashed_password = get_password_hash(user.password)
 
-    # ✅ Create new user
+    # Create new user
     new_user = Users(
         username=username,
         email=user.email,
@@ -127,7 +127,7 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
-    # ✅ If user is a patient, create associated patient record
+    # If user is a patient, create associated patient record
     if user.role == "patient":
         patient = Patient(
             user_id=new_user.id,
@@ -137,10 +137,9 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
         db.add(patient)
         db.commit()
 
-    # ✅ Generate and return token
+    # Generate and return token
     access_token = create_access_token(data={"sub": new_user.username})
     return {"access_token": access_token, "token_type": "bearer"}
-
 
 @app.post("/auth/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -152,6 +151,11 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Update last login time
+    user.last_login = datetime.utcnow()
+    db.commit()
+    
     access_token = create_access_token(data={"sub": user.username})
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -214,6 +218,56 @@ async def get_all_appointments(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
     return db.query(WellnessAppointments).all()
+
+@app.get("/admin/dashboard-stats")
+async def get_dashboard_stats(db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+
+    # Total users count
+    total_users = db.query(func.count(Users.id)).scalar()
+    
+    # Active labs count
+    active_labs = db.query(func.count(Labs.lab_id)).scalar()
+    
+    # Appointments today count
+    appointments_today = db.query(func.count(WellnessAppointments.appointment_id))\
+        .filter(func.date(WellnessAppointments.appointment_date) == date.today()).scalar()
+    
+    # Total tests done
+    total_tests = db.query(func.count(TestResults.id)).scalar()
+    
+    # Total appointments created
+    total_appointments = db.query(func.count(WellnessAppointments.appointment_id)).scalar()
+
+    return {
+        "total_users": total_users,
+        "active_labs": active_labs,
+        "appointments_today": appointments_today,
+        "total_tests": total_tests,
+        "total_appointments": total_appointments
+    }
+
+@app.get("/admin/recent-users")
+async def get_recent_users(db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+
+    # Get recent users with their last login time
+    users = db.query(Users).order_by(Users.last_login.desc()).limit(5).all()
+    
+    return [
+        {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": user.role,
+            "is_active": user.is_active,
+            "created_at": user.created_at,
+            "last_login": user.last_login
+        }
+        for user in users
+    ]
 
 @app.get("/patient/dashboard-stats")
 async def get_patient_dashboard_stats(
@@ -474,42 +528,6 @@ async def get_audit_logs(
             detail="Only admins can view audit logs"
         )
     return db.query(AuditTrail).all()
-
-@app.get("/admin/dashboard-stats")
-async def get_dashboard_stats(db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admins only")
-
-    total_users = db.query(func.count(Users.id)).scalar()
-    active_labs = db.query(func.count(Labs.lab_id)).scalar()
-    appointments_today = db.query(func.count(WellnessAppointments.appointment_id))\
-        .filter(func.date(WellnessAppointments.appointment_date) == date.today()).scalar()
-
-    system_health = 99.8  # Simulated metric
-
-    return {
-        "total_users": total_users,
-        "active_labs": active_labs,
-        "appointments_today": appointments_today,
-        "system_health": system_health
-    }
-
-@app.get("/admin/recent-users")
-async def get_recent_users(db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
-    if current_user.role not in ["admin", "lab_tech"]:
-        raise HTTPException(status_code=403, detail="Admins or Lab Techs only")
-
-
-    users = db.query(Users).order_by(Users.created_at.desc()).limit(5).all()
-    return [
-        {
-            "name": user.username.title(),
-            "role": user.role,
-            "status": "Active" if user.is_active else "Pending",
-            "time": user.created_at.strftime("%H:%M")
-        }
-        for user in users
-    ]
 
 @app.post("/admin/upload-census")
 async def upload_census_file(
