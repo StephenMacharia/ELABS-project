@@ -29,7 +29,6 @@ load_dotenv()
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
 # -----------------------
 # Configuration Class
 # -----------------------
@@ -58,12 +57,27 @@ fernet = Fernet(Config.FERNET_KEY.encode())
 # -----------------------
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    Verify a password against its hashed value.
+    bcrypt only supports up to 72 bytes, so truncate before verifying.
+    """
+    plain_password = plain_password[:72]
     return pwd_context.verify(plain_password, hashed_password)
 
+
 def get_password_hash(password: str) -> str:
+    """
+    Hash a password for storage.
+    bcrypt only supports up to 72 bytes, so truncate before hashing.
+    """
+    password = password[:72]
     return pwd_context.hash(password)
 
+
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Create a JWT access token with an expiration.
+    """
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=Config.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
@@ -81,6 +95,7 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
 def generate_random_code(length: int = 6) -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
+
 def generate_unique_code(db: Session, length: int = 6, max_attempts: int = 10) -> str:
     for _ in range(max_attempts):
         code = generate_random_code(length)
@@ -94,6 +109,9 @@ def generate_unique_code(db: Session, length: int = 6, max_attempts: int = 10) -
 # -----------------------
 
 def ai_schedule_appointment(patient_id: int, test_date: date, db: Session) -> Optional[WellnessAppointments]:
+    """
+    AI-based appointment scheduling that picks the first available lab.
+    """
     try:
         available_labs = db.query(Labs).filter(Labs.capacity > 0).order_by(Labs.lab_id).all()
         if not available_labs:
@@ -138,6 +156,7 @@ def encrypt_message(message: str) -> str:
     except Exception as e:
         logger.error(f"Encryption failed: {e}")
         raise ValueError("Encryption failed") from e
+
 
 def decrypt_message(encrypted_message: str) -> str:
     try:
