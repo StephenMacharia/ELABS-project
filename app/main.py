@@ -56,9 +56,15 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# List all allowed origins explicitly
+allowed_origins = [
+    "https://elab-hub-nexus-ui.vercel.app",  # your Vercel frontend
+    "http://localhost:3000",                 # for local dev
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("*", "*").split(","),
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
