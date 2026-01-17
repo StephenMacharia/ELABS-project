@@ -61,8 +61,22 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Verify a password against its hashed value.
     bcrypt only supports up to 72 bytes, so truncate before verifying.
     """
-    plain_password = plain_password[:72]
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except ValueError as e:
+        if "password cannot be longer than 72 bytes" in str(e):
+            # Truncate to 72 bytes (not characters!)
+            password_bytes = plain_password.encode('utf-8')
+            if len(password_bytes) > 72:
+                # Truncate to 72 bytes and decode back to string
+                truncated_bytes = password_bytes[:72]
+                # Try to decode, ignoring any incomplete trailing character
+                truncated_password = truncated_bytes.decode('utf-8', 'ignore')
+                logger.warning(f"Password truncated from {len(password_bytes)} bytes to 72 bytes for verification")
+                return pwd_context.verify(truncated_password, hashed_password)
+        # Re-raise if it's a different error
+        logger.error(f"Password verification failed: {e}")
+        return False
 
 
 def get_password_hash(password: str) -> str:
@@ -70,7 +84,15 @@ def get_password_hash(password: str) -> str:
     Hash a password for storage.
     bcrypt only supports up to 72 bytes, so truncate before hashing.
     """
-    password = password[:72]
+    # Convert to bytes to check length
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        # Truncate to 72 bytes and decode back to string
+        truncated_bytes = password_bytes[:72]
+        # Try to decode, ignoring any incomplete trailing character
+        truncated_password = truncated_bytes.decode('utf-8', 'ignore')
+        logger.warning(f"Password truncated from {len(password_bytes)} bytes to 72 bytes for hashing")
+        return pwd_context.hash(truncated_password)
     return pwd_context.hash(password)
 
 
