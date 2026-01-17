@@ -17,7 +17,7 @@ from app.utilis import (
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from typing import List, Optional
+from typing import List, Optional, Annotated
 from jose import jwt, JWTError
 from datetime import datetime, date, timedelta
 import os
@@ -148,7 +148,10 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/auth/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def login(
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    db: Session = Depends(get_db)
+):
     username = form_data.username.lower()
     user = db.query(Users).filter(Users.username == username).first()
     if not user or not verify_password(form_data.password, user.password):
@@ -170,7 +173,11 @@ async def read_current_user(current_user: Users = Depends(get_current_user)):
     return current_user
 
 @app.post("/patients", response_model=PatientRead, status_code=status.HTTP_201_CREATED)
-async def create_patient(patient: PatientCreate, db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
+async def create_patient(
+    patient: PatientCreate, 
+    db: Session = Depends(get_db), 
+    current_user: Users = Depends(get_current_user)
+):
     if current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can create patients")
     existing_patient = db.query(Patient).filter(Patient.email == patient.email).first()
@@ -510,7 +517,7 @@ async def get_messages(
     db: Session = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    if current_user.id != id and current_user.role != "admin":
+    if current_user.id != user_id and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view these messages"
@@ -518,8 +525,8 @@ async def get_messages(
 
     return db.query(ChatMessages).filter(
         or_(
-            ChatMessages.sender_id == id,
-            ChatMessages.recipient_id == id
+            ChatMessages.sender_id == user_id,
+            ChatMessages.recipient_id == user_id
         )
     ).order_by(ChatMessages.sent_at.asc()).all()
 
