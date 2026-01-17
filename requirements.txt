@@ -1,29 +1,23 @@
-python-jose
-uvicorn
-fastapi
+# Core Framework
 fastapi>=0.115.0
-sqlalchemy==2.0.28
-databases
-pydantic
-pymysql
-python-dotenv
-fastapi[all]
-uvicorn
-sqlalchemy
-databases
-python-jose[cryptography]
-passlib[bcrypt]
-pymysql
-fastapi==0.104.1
-uvicorn==0.24.0
-passlib==1.7.4
-bcrypt==4.0.1
-python-jose[cryptography]==3.3.0
-python-multipart==0.0.6
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-dotenv==1.0.0
-python-multipart==0.0.6
-pymysql==1.1.0
+uvicorn[standard]>=0.30.0
+
+# Data & Database
+pydantic>=2.10.0
+pydantic-settings>=2.1.0
+sqlalchemy>=2.0.35
+pymysql>=1.1.0
+databases[mysql]>=0.9.0
+greenlet>=3.1.1
+
+# Security & Auth
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.1
+python-multipart>=0.0.12
+
+# Utilities
+python-dotenv>=1.0.0
+jinja2>=3.1.3
+alembic>=1.13.0
+httpx>=0.27.0
