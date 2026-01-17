@@ -1,6 +1,7 @@
 python-jose
 uvicorn
 fastapi
+fastapi>=0.115.0
 sqlalchemy==2.0.28
 databases
 pydantic
